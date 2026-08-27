@@ -23,7 +23,6 @@ env:
 jobs:
 
   docker:
-
     name: Build and Push Images
     runs-on: ubuntu-latest
 
@@ -40,12 +39,15 @@ jobs:
         id: image-tag
         shell: bash
         run: |
-          TAG="build:${GITHUB_RUN_NUMBER}"
+          TAG="build-${GITHUB_RUN_NUMBER}"
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "build_number=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-          echo "Image tag: ${TAG}"
+          echo "=========================================="
+          echo "IMAGE TAG"
+          echo "=========================================="
+          echo "${TAG}"
 
       - name: Set Up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -82,6 +84,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Verify Published Images
+        shell: bash
         run: |
           echo "=========================================="
           echo "IMAGES PUBLISHED SUCCESSFULLY"
@@ -105,8 +108,7 @@ jobs:
 
 
   update-gitops:
-
-    name: Update GitOps And Deploy
+    name: Update GitOps Image Tags
     needs: docker
     runs-on: ubuntu-latest
 
@@ -124,19 +126,27 @@ jobs:
       - name: Verify GitOps Files
         shell: bash
         run: |
-          test -f gitops/k8s/backend-deployment.yaml
-          test -f gitops/k8s/frontend-deployment.yaml
+          if [ ! -f gitops/k8s/backend-deployment.yaml ]; then
+            echo "ERROR: backend-deployment.yaml not found"
+            exit 1
+          fi
+
+          if [ ! -f gitops/k8s/frontend-deployment.yaml ]; then
+            echo "ERROR: frontend-deployment.yaml not found"
+            exit 1
+          fi
 
           echo "GitOps deployment files found."
 
       - name: Show Current Images
+        shell: bash
         run: |
           echo "=========================================="
           echo "CURRENT BACKEND IMAGE"
           echo "=========================================="
 
           grep "image: ghcr.io/devendra-5470/hireflow-backend:" \
-            gitops/k8s/backend-deployment.yaml
+            gitops/k8s/backend-deployment.yaml || true
 
           echo ""
           echo "=========================================="
@@ -144,7 +154,7 @@ jobs:
           echo "=========================================="
 
           grep "image: ghcr.io/devendra-5470/hireflow-frontend:" \
-            gitops/k8s/frontend-deployment.yaml
+            gitops/k8s/frontend-deployment.yaml || true
 
       - name: Update Backend Image
         shell: bash
@@ -162,7 +172,8 @@ jobs:
             "s|image: ghcr.io/devendra-5470/hireflow-frontend:.*|image: ghcr.io/devendra-5470/hireflow-frontend:${{ needs.docker.outputs.image_tag }}|" \
             gitops/k8s/frontend-deployment.yaml
 
-      - name: Show Updated Images
+      - name: Verify Updated Images
+        shell: bash
         run: |
           echo "=========================================="
           echo "UPDATED BACKEND IMAGE"
@@ -184,9 +195,10 @@ jobs:
         working-directory: gitops
         shell: bash
         run: |
-          git diff -- backend-deployment.yaml frontend-deployment.yaml || true
-
-          if git diff --quiet -- k8s/backend-deployment.yaml k8s/frontend-deployment.yaml; then
+          if git diff --quiet -- \
+            k8s/backend-deployment.yaml \
+            k8s/frontend-deployment.yaml
+          then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No GitOps changes detected."
           else
@@ -207,7 +219,7 @@ jobs:
             k8s/frontend-deployment.yaml
 
           git commit \
-            -m "deploy: build ${{ needs.docker.outputs.build_number }}"
+            -m "deploy: build-${{ needs.docker.outputs.build_number }}"
 
       - name: Push GitOps Changes
         if: steps.changes.outputs.changed == 'true'
@@ -218,13 +230,14 @@ jobs:
           git push origin HEAD:main
 
       - name: Deployment Summary
+        shell: bash
         run: |
           echo "=========================================="
           echo "GITOPS DEPLOYMENT COMPLETED"
           echo "=========================================="
 
           echo ""
-          echo "Build:"
+          echo "Build Number:"
           echo "${{ needs.docker.outputs.build_number }}"
 
           echo ""
@@ -232,4 +245,12 @@ jobs:
           echo "${{ needs.docker.outputs.image_tag }}"
 
           echo ""
-          echo "Argo CD will detect the Git commit and sync."
+          echo "Backend Image:"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/hireflow-backend:${{ needs.docker.outputs.image_tag }}"
+
+          echo ""
+          echo "Frontend Image:"
+          echo "${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/hireflow-frontend:${{ needs.docker.outputs.image_tag }}"
+
+          echo ""
+          echo "Argo CD will automatically detect the GitOps commit."
